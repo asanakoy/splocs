@@ -2,14 +2,14 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import splu
 
-from util import veclen, normalized
+from .util import veclen, normalized
 
 
 def compute_mesh_laplacian(verts, tris):
     """
     computes a sparse matrix representing the discretized laplace-beltrami operator of the mesh
     given by n vertex positions ("verts") and a m triangles ("tris") 
-    
+
     verts: (n, 3) array (float)
     tris: (m, 3) array (int) - indices into the verts array
 
@@ -27,10 +27,10 @@ def compute_mesh_laplacian(verts, tris):
     W_ij = np.empty(0)
     I = np.empty(0, np.int32)
     J = np.empty(0, np.int32)
-    for i1, i2, i3 in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]: # for edge i2 --> i3 facing vertex i1
-        vi1 = tris[:,i1] # vertex index of i1
-        vi2 = tris[:,i2]
-        vi3 = tris[:,i3]
+    for i1, i2, i3 in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]:  # for edge i2 --> i3 facing vertex i1
+        vi1 = tris[:, i1]  # vertex index of i1
+        vi2 = tris[:, i2]
+        vi3 = tris[:, i3]
         # vertex vi1 faces the edge between vi2--vi3
         # compute the angle at v1
         # add cotangent angle at v1 to opposite edge v2--v3
@@ -49,15 +49,15 @@ def compute_mesh_laplacian(verts, tris):
     L = L - sparse.spdiags(L * np.ones(n), 0, n, n)
     L = L.tocsr()
     # area matrix
-    e1 = verts[tris[:,1]] - verts[tris[:,0]]
-    e2 = verts[tris[:,2]] - verts[tris[:,0]]
+    e1 = verts[tris[:, 1]] - verts[tris[:, 0]]
+    e2 = verts[tris[:, 2]] - verts[tris[:, 0]]
     n = np.cross(e1, e2)
     triangle_area = .5 * veclen(n)
     # compute per-vertex area
     vertex_area = np.zeros(len(verts))
     ta3 = triangle_area / 3
-    for i in xrange(tris.shape[1]):
-        bc = np.bincount(tris[:,i].astype(int), ta3)
+    for i in range(tris.shape[1]):
+        bc = np.bincount(tris[:, i].astype(int), ta3)
         vertex_area[:len(bc)] += bc
     VA = sparse.spdiags(vertex_area, 0, len(verts), len(verts))
     return L, VA
@@ -81,17 +81,18 @@ class GeodesicDistanceComputation(object):
         self._verts = verts
         self._tris = tris
         # precompute some stuff needed later on
-        e01 = verts[tris[:,1]] - verts[tris[:,0]]
-        e12 = verts[tris[:,2]] - verts[tris[:,1]]
-        e20 = verts[tris[:,0]] - verts[tris[:,2]]
+        e01 = verts[tris[:, 1]] - verts[tris[:, 0]]
+        e12 = verts[tris[:, 2]] - verts[tris[:, 1]]
+        e20 = verts[tris[:, 0]] - verts[tris[:, 2]]
         self._triangle_area = .5 * veclen(np.cross(e01, e12))
         unit_normal = normalized(np.cross(normalized(e01), normalized(e12)))
         self._unit_normal_cross_e01 = np.cross(unit_normal, e01)
         self._unit_normal_cross_e12 = np.cross(unit_normal, e12)
         self._unit_normal_cross_e20 = np.cross(unit_normal, e20)
         # parameters for heat method
-        h = np.mean(map(veclen, [e01, e12, e20]))
+        h = np.mean(list(map(veclen, [e01, e12, e20])))
         t = m * h ** 2
+        self._av_t = t
         # pre-factorize poisson systems
         Lc, A = compute_mesh_laplacian(verts, tris)
         self._factored_AtLc = splu((A - t * Lc).tocsc()).solve
@@ -107,29 +108,31 @@ class GeodesicDistanceComputation(object):
         u0[idx] = 1.0
         # heat method, step 1
         u = self._factored_AtLc(u0).ravel()
+        self._av_u = u
         # heat method step 2
-        grad_u = 1 / (2 * self._triangle_area)[:,np.newaxis] * (
-              self._unit_normal_cross_e01 * u[self._tris[:,2]][:,np.newaxis]
-            + self._unit_normal_cross_e12 * u[self._tris[:,0]][:,np.newaxis]
-            + self._unit_normal_cross_e20 * u[self._tris[:,1]][:,np.newaxis]
+        grad_u = 1 / (2 * self._triangle_area)[:, np.newaxis] * (
+            self._unit_normal_cross_e01 * u[self._tris[:, 2]][:, np.newaxis]
+            + self._unit_normal_cross_e12 * u[self._tris[:, 0]][:, np.newaxis]
+            + self._unit_normal_cross_e20 * u[self._tris[:, 1]][:, np.newaxis]
         )
-        X = - grad_u / veclen(grad_u)[:,np.newaxis]
+        X = - grad_u / veclen(grad_u)[:, np.newaxis]
+        self._av_X = X
         # heat method step 3
         div_Xs = np.zeros(len(self._verts))
-        for i1, i2, i3 in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]: # for edge i2 --> i3 facing vertex i1
-            vi1, vi2, vi3 = self._tris[:,i1], self._tris[:,i2], self._tris[:,i3]
+        for i1, i2, i3 in [(0, 1, 2), (1, 2, 0), (2, 0, 1)]:  # for edge i2 --> i3 facing vertex i1
+            vi1, vi2, vi3 = self._tris[:, i1], self._tris[:, i2], self._tris[:, i3]
             e1 = self._verts[vi2] - self._verts[vi1]
             e2 = self._verts[vi3] - self._verts[vi1]
             e_opp = self._verts[vi3] - self._verts[vi2]
-            cot1 = 1 / np.tan(np.arccos( 
+            cot1 = 1 / np.tan(np.arccos(
                 (normalized(-e2) * normalized(-e_opp)).sum(axis=1)))
             cot2 = 1 / np.tan(np.arccos(
-                (normalized(-e1) * normalized( e_opp)).sum(axis=1)))
+                (normalized(-e1) * normalized(e_opp)).sum(axis=1)))
             div_Xs += np.bincount(
-                vi1.astype(int), 
-		0.5 * (cot1 * (e1 * X).sum(axis=1) + cot2 * (e2 * X).sum(axis=1)), 
-		minlength=len(self._verts))
+                vi1.astype(int),
+                0.5 * (cot1 * (e1 * X).sum(axis=1) + cot2 * (e2 * X).sum(axis=1)),
+                minlength=len(self._verts))
+        self._av_divX = div_Xs
         phi = self._factored_L(div_Xs).ravel()
         phi -= phi.min()
         return phi
-
